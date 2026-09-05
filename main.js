@@ -17,6 +17,7 @@ import {
 } from './simulation.js';
 import { Missions } from './missions.js';
 import { UI } from './ui.js';
+import { Graphics } from './graphics.js';
 
 const SETTINGS_KEY = 'neon-coast-settings-v2';
 const DEFAULT_SETTINGS = {
@@ -134,6 +135,9 @@ class Game {
     this.makePostprocessing();
     this.makeHeadlights();
     this.makeObjectiveBeacon();
+
+    this.graphics = new Graphics(this);
+
     this.applySettings();
     this.bindEvents();
     this.syncVisuals();
@@ -280,6 +284,7 @@ class Game {
       this.settings.reducedMotion || this.settings.quality === 'low'
         ? 0
         : 0.003;
+    this.graphics?.applyQuality();
 
     try {
       localStorage.setItem(SETTINGS_KEY, JSON.stringify(this.settings));
@@ -668,6 +673,8 @@ class Game {
       this.updateHeadlights();
       this.updateBeacon();
       this.ui.update(this.running ? dt : 0);
+      this.graphics.update(this.running ? dt : 0);
+
       this.grade.uniforms.time.value = this.time.elapsed;
       this.composer.render(dt);
     } catch (error) {
