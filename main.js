@@ -433,6 +433,9 @@ class Game {
       console.warn('Audio could not start:', error);
     }
     this.captureMouse();
+    if (this.touchDevice && window.innerWidth > window.innerHeight) {
+      MobileControls.requestFullscreen();
+    }
     this.lastTime = performance.now();
   }
 

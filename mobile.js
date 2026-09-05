@@ -28,6 +28,72 @@ export class MobileControls {
     settings.reducedMotion = true;
   }
 
+  static requestFullscreen() {
+    const doc = document.documentElement;
+    const isFs = !!(
+      document.fullscreenElement ||
+      document.webkitFullscreenElement ||
+      document.mozFullScreenElement ||
+      document.msFullscreenElement
+    );
+
+    if (isFs) return;
+
+    const rfs = doc.requestFullscreen ||
+      doc.webkitRequestFullscreen ||
+      doc.mozRequestFullScreen ||
+      doc.msRequestFullscreen;
+
+    if (rfs) {
+      try {
+        const p = rfs.call(doc, { navigationUI: 'hide' });
+        if (p?.catch) p.catch(() => {});
+      } catch {}
+    }
+
+    try {
+      if (screen.orientation && screen.orientation.lock) {
+        screen.orientation.lock('landscape').catch(() => {});
+      }
+    } catch {}
+  }
+
+  static exitFullscreen() {
+    const efs = document.exitFullscreen ||
+      document.webkitExitFullscreen ||
+      document.mozCancelFullScreen ||
+      document.msExitFullscreen;
+
+    const isFs = !!(
+      document.fullscreenElement ||
+      document.webkitFullscreenElement ||
+      document.mozFullScreenElement ||
+      document.msFullscreenElement
+    );
+
+    if (efs && isFs) {
+      try {
+        const p = efs.call(document);
+        if (p?.catch) p.catch(() => {});
+      } catch {}
+    }
+  }
+
+  static toggleFullscreen() {
+    const isFs = !!(
+      document.fullscreenElement ||
+      document.webkitFullscreenElement ||
+      document.mozFullScreenElement ||
+      document.msFullscreenElement
+    );
+
+    if (isFs) {
+      MobileControls.exitFullscreen();
+    } else {
+      MobileControls.requestFullscreen();
+    }
+  }
+
   constructor(game) {
     this.game = game;
     this.enabled = MobileControls.supported();
@@ -38,6 +104,7 @@ export class MobileControls {
 
     this.vehicleMode = null;
     this.visible = false;
+    this.wasPortrait = window.innerHeight > window.innerWidth;
 
     game.touchDevice = this.enabled;
 
@@ -48,8 +115,56 @@ export class MobileControls {
     this.build();
     this.bind();
 
+    const checkOrientation = () => {
+      const isLandscape = window.innerWidth > window.innerHeight;
+      if (isLandscape && (this.enabled || this.game.touchDevice)) {
+        MobileControls.requestFullscreen();
+      }
+      this.wasPortrait = !isLandscape;
+    };
+
+    // Auto-enter fullscreen upon rotation to landscape
+    window.addEventListener('orientationchange', () => {
+      checkOrientation();
+      setTimeout(checkOrientation, 150);
+      setTimeout(checkOrientation, 450);
+    });
+
+    if (window.screen?.orientation) {
+      window.screen.orientation.addEventListener('change', () => {
+        checkOrientation();
+        setTimeout(checkOrientation, 200);
+      });
+    }
+
+    window.addEventListener('resize', () => {
+      this.reset();
+      const isLandscape = window.innerWidth > window.innerHeight;
+      if (isLandscape && this.wasPortrait && (this.enabled || this.game.touchDevice)) {
+        MobileControls.requestFullscreen();
+      }
+      this.wasPortrait = !isLandscape;
+    });
+
+    // Touch gesture hook: browsers require user activation for fullscreen.
+    // When the user touches anywhere on the screen while in landscape, enter fullscreen!
+    const triggerFullscreenOnTouch = () => {
+      const isLandscape = window.innerWidth > window.innerHeight;
+      const isFs = !!(
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.mozFullScreenElement ||
+        document.msFullscreenElement
+      );
+
+      if ((this.enabled || this.game.touchDevice) && isLandscape && !isFs) {
+        MobileControls.requestFullscreen();
+      }
+    };
+
+    window.addEventListener('pointerdown', triggerFullscreenOnTouch, { passive: true });
+
     window.addEventListener('blur', () => this.reset());
-    window.addEventListener('resize', () => this.reset());
 
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) this.reset();
@@ -184,6 +299,12 @@ export class MobileControls {
 
       #ncToolbar button {
         width: 52px;
+      }
+
+      #ncFullscreen {
+        width: 44px !important;
+        min-width: 44px !important;
+        font-size: 15px !important;
       }
 
       #ncPhoneTabs {
@@ -386,6 +507,7 @@ export class MobileControls {
         <button type="button" id="ncPhone">PHONE</button>
         <button type="button" id="ncMap">MAP</button>
         <button type="button" id="ncPause">PAUSE</button>
+        <button type="button" id="ncFullscreen" aria-label="Toggle fullscreen" title="Fullscreen">⛶</button>
       </div>
 
       <div id="ncPhoneTabs" hidden>
@@ -566,6 +688,12 @@ export class MobileControls {
       run: () => game.ui.pauseMenu()
     }));
 
+    if (e.ncFullscreen) {
+      this.button(e.ncFullscreen, () => ({
+        run: () => MobileControls.toggleFullscreen()
+      }));
+    }
+
     for (const button of e.ncPhoneTabs.querySelectorAll('button')) {
       this.button(button, () => ({
         key: `Digit${button.dataset.tab}`
@@ -695,6 +823,16 @@ export class MobileControls {
         : game.player.target?.type === 'vehicle'
           ? 'ENTER'
           : 'USE';
+
+    if (e.ncFullscreen) {
+      const isFs = !!(
+        document.fullscreenElement ||
+        document.webkitFullscreenElement ||
+        document.mozFullScreenElement ||
+        document.msFullscreenElement
+      );
+      e.ncFullscreen.textContent = isFs ? '🗗' : '⛶';
+    }
 
     // Keep the physical phone within the portrait camera view.
     const portrait = innerHeight > innerWidth;
