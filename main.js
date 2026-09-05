@@ -18,6 +18,7 @@ import {
 import { Missions } from './missions.js';
 import { UI } from './ui.js';
 import { Graphics } from './graphics.js';
+import { MobileControls } from './mobile.js';
 
 const SETTINGS_KEY = 'neon-coast-settings-v2';
 const DEFAULT_SETTINGS = {
@@ -88,6 +89,11 @@ class Game {
   constructor() {
     this.canvas = document.getElementById('game');
     this.settings = readSettings();
+    this.touchDevice = MobileControls.supported();
+
+    if (this.touchDevice) {
+      MobileControls.applyDefaults(this.settings);
+    }
     this.started = false;
     this.paused = true;
     this.failed = false;
@@ -136,6 +142,7 @@ class Game {
     this.makeHeadlights();
     this.makeObjectiveBeacon();
 
+    this.mobile = new MobileControls(this);
     this.graphics = new Graphics(this);
 
     this.applySettings();
@@ -266,7 +273,10 @@ class Game {
     this.sound.volume = this.settings.volume;
     this.sound.radio = this.settings.radio;
 
-    const ratios = { low: 1, medium: 1.5, high: 2 };
+    const ratios = this.touchDevice
+      ? { low: 0.8, medium: 1, high: 1.25 }
+      : { low: 1, medium: 1.5, high: 2 };
+
     const ratio = Math.min(
       window.devicePixelRatio || 1,
       ratios[this.settings.quality]
@@ -377,6 +387,8 @@ class Game {
   }
 
   captureMouse() {
+    if (this.touchDevice) return;
+
     if (!this.canvas.requestPointerLock) {
       this.ui.toast('Hold the left mouse button and drag to look.', 6);
       return;
@@ -400,6 +412,7 @@ class Game {
 
   pause() {
     this.paused = true;
+    this.mobile?.reset();
     this.dragLook = false;
     this.input.clear();
     this.sound.pause();
@@ -664,6 +677,8 @@ class Game {
     try {
       const dt = clamp((now - this.lastTime) / 1000, 0.001, 0.05);
       this.lastTime = now;
+
+      this.mobile?.update();
 
       if (this.running) this.update(dt);
       else this.input.take();
