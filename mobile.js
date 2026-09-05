@@ -1,52 +1,52 @@
 export class MobileControls {
   static supported() {
+    const forced = new URLSearchParams(location.search).get('touch');
+
+    if (forced === '1') return true;
+    if (forced === '0') return false;
+
     return (
-      navigator.maxTouchPoints > 0 &&
+      window.matchMedia('(pointer: coarse)').matches ||
+      window.matchMedia('(any-pointer: coarse)').matches ||
+      /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
       (
-        window.matchMedia('(pointer: coarse)').matches ||
-        window.matchMedia('(any-pointer: coarse)').matches
+        navigator.maxTouchPoints > 1 &&
+        /Macintosh/i.test(navigator.userAgent)
       )
     );
   }
 
   static applyDefaults(settings) {
-    // Apply the mobile preset once, then preserve later settings changes.
     const key = 'neon-coast-touch-preset-v1';
-    let firstRun = true;
 
     try {
-      firstRun = !localStorage.getItem(key);
+      if (localStorage.getItem(key)) return;
+      localStorage.setItem(key, '1');
     } catch {}
-
-    if (!firstRun) return;
 
     settings.quality = 'low';
     settings.reducedMotion = true;
-
-    try {
-      localStorage.setItem(key, '1');
-    } catch {}
   }
 
   constructor(game) {
     this.game = game;
-    this.enabled = game.touchDevice;
+    this.enabled = MobileControls.supported();
 
     this.sources = new Map();
-    this.heldKeys = new Set();
-    this.cancellers = [];
+    this.held = new Set();
+    this.cancelHandlers = [];
 
-    this.lastScreen = '';
-    this.lastVehicleMode = null;
-    this.wasRunning = false;
+    this.vehicleMode = null;
+    this.visible = false;
+
+    game.touchDevice = this.enabled;
 
     if (!this.enabled) return;
 
     document.documentElement.classList.add('nc-mobile');
 
-    this.installStyles();
-    this.buildControls();
-    this.bindControls();
+    this.build();
+    this.bind();
 
     window.addEventListener('blur', () => this.reset());
     window.addEventListener('resize', () => this.reset());
@@ -56,21 +56,16 @@ export class MobileControls {
     });
   }
 
-  installStyles() {
+  build() {
     const style = document.createElement('style');
 
     style.textContent = `
-      html.nc-mobile,
-      html.nc-mobile body {
+      .nc-mobile body {
         overscroll-behavior: none;
       }
 
       .nc-mobile #game {
         touch-action: none;
-      }
-
-      .nc-mobile #overlay {
-        touch-action: pan-y;
       }
 
       #ncTouch {
@@ -83,11 +78,10 @@ export class MobileControls {
         -webkit-touch-callout: none;
         -webkit-tap-highlight-color: transparent;
 
-        --nc-bottom: env(safe-area-inset-bottom, 0px);
-        --nc-left: env(safe-area-inset-left, 0px);
-        --nc-right: env(safe-area-inset-right, 0px);
-        --nc-top: env(safe-area-inset-top, 0px);
-        --nc-stick: clamp(112px, 24vmin, 148px);
+        --bottom: env(safe-area-inset-bottom, 0px);
+        --left: env(safe-area-inset-left, 0px);
+        --right: env(safe-area-inset-right, 0px);
+        --top: env(safe-area-inset-top, 0px);
       }
 
       #ncTouch[hidden],
@@ -102,79 +96,69 @@ export class MobileControls {
         touch-action: none;
       }
 
-      #ncLook {
-        position: absolute;
-        left: 40%;
-        right: 0;
-        top: 0;
-        bottom: 0;
-      }
-
       #ncTouch button {
-        min-width: 46px;
-        min-height: 46px;
+        min-width: 48px;
+        min-height: 48px;
+        margin: 0;
         padding: 5px;
-        border: 1px solid #b5e8d36b;
-        border-radius: 12px;
-        background: #0b1c30a8;
-        color: #edf8f0;
-        font: 600 11px system-ui, sans-serif;
-        box-shadow: 0 3px 12px #0003;
+        border: 2px solid #c6ecdd99;
+        border-radius: 14px;
+        background: #112637da;
+        color: white;
+        font: 700 11px system-ui, sans-serif;
+        box-shadow: 0 4px 12px #0005;
         text-shadow: 0 1px 3px #000;
       }
 
       #ncTouch button.down {
-        background: #82cdb68c;
-        border-color: #dcfff0;
-        color: white;
+        background: #438e78ed;
+        border-color: #e0ffef;
+      }
+
+      #ncLook {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 38%;
+        right: 0;
+      }
+
+      #ncLookHint {
+        position: absolute;
+        right: 16%;
+        top: 48%;
+        color: #ffffff65;
+        font: 10px system-ui;
+        letter-spacing: .12em;
+        pointer-events: none;
       }
 
       #ncStick {
         position: absolute;
-        left: calc(18px + var(--nc-left));
-        bottom: calc(24px + var(--nc-bottom));
-        width: var(--nc-stick);
-        height: var(--nc-stick);
+        left: calc(20px + var(--left));
+        bottom: calc(24px + var(--bottom));
+        width: 138px;
+        height: 138px;
+        border: 3px solid #d1f4e19c;
         border-radius: 50%;
-        border: 1px solid #bddfcf73;
         background:
-          radial-gradient(circle, #b5e8d30a 30%, #112b4266 70%);
-        box-shadow: inset 0 0 25px #0003;
-      }
-
-      #ncStick::before,
-      #ncStick::after {
-        content: '';
-        position: absolute;
-        pointer-events: none;
-        background: #c0e5d41f;
-      }
-
-      #ncStick::before {
-        left: 50%;
-        top: 13%;
-        width: 1px;
-        height: 74%;
-      }
-
-      #ncStick::after {
-        top: 50%;
-        left: 13%;
-        height: 1px;
-        width: 74%;
+          radial-gradient(circle, #517f7960, #10283dce);
+        box-shadow:
+          0 6px 22px #0005,
+          inset 0 0 24px #0005;
       }
 
       #ncKnob {
         position: absolute;
         left: 50%;
         top: 50%;
-        width: 46px;
-        height: 46px;
-        transform: translate(-50%, -50%);
+        width: 54px;
+        height: 54px;
         border-radius: 50%;
-        border: 1px solid #d4fbe3b3;
-        background: #a7dbc559;
-        box-shadow: 0 3px 12px #0003;
+        border: 2px solid #e0fff0;
+        background: #90cbbac7;
+        transform: translate(-50%, -50%);
+        box-shadow: 0 3px 10px #0006;
         pointer-events: none;
       }
 
@@ -183,106 +167,101 @@ export class MobileControls {
         bottom: 8px;
         left: 0;
         right: 0;
-        color: #e0f4e7b0;
-        font: 9px system-ui, sans-serif;
-        letter-spacing: .16em;
         text-align: center;
+        color: #e1faee;
+        font: 9px system-ui;
+        letter-spacing: .18em;
         pointer-events: none;
       }
 
       #ncToolbar {
         position: absolute;
-        top: calc(74px + var(--nc-top));
-        right: calc(12px + var(--nc-right));
+        top: calc(76px + var(--top));
+        right: calc(12px + var(--right));
         display: flex;
         gap: 7px;
       }
 
       #ncToolbar button {
-        min-width: 48px;
-        min-height: 44px;
+        width: 52px;
       }
 
       #ncPhoneTabs {
         position: absolute;
-        top: calc(126px + var(--nc-top));
-        right: calc(12px + var(--nc-right));
-        display: grid;
-        grid-template-columns: repeat(4, 43px);
+        top: calc(133px + var(--top));
+        right: calc(12px + var(--right));
+        display: flex;
         gap: 5px;
       }
 
       #ncPhoneTabs button {
-        min-width: 43px;
-        min-height: 42px;
+        min-width: 41px;
+        width: 41px;
+        min-height: 43px;
         font-size: 9px;
       }
 
       #ncActions {
         position: absolute;
-        right: calc(14px + var(--nc-right));
-        bottom: calc(88px + var(--nc-bottom));
+        right: calc(16px + var(--right));
+        bottom: calc(22px + var(--bottom));
         display: grid;
-        grid-template-columns: repeat(3, 52px);
+        grid-template-columns: repeat(2, 61px);
         gap: 8px;
       }
 
       #ncActions button {
-        height: 52px;
+        height: 55px;
       }
 
       #ncUse {
-        position: absolute;
-        right: calc(14px + var(--nc-right));
-        bottom: calc(20px + var(--nc-bottom));
-        width: 112px;
-        height: 56px;
-        border-color: #e7a3bd !important;
-        background: #55374fa8 !important;
-        font-size: 14px !important;
+        background: #76506ce8 !important;
+        border-color: #f2bdd4 !important;
       }
 
       #ncUse.down {
-        background: #a66589bd !important;
+        background: #b4719ee8 !important;
       }
 
       #ncPedals {
         position: absolute;
-        right: calc(143px + var(--nc-right));
-        bottom: calc(14px + var(--nc-bottom));
+        left: 50%;
+        bottom: calc(22px + var(--bottom));
+        transform: translateX(-50%);
         display: flex;
-        gap: 9px;
+        gap: 10px;
       }
 
       #ncPedals button {
         width: 65px;
-        height: 65px;
+        height: 76px;
       }
 
       #ncGas {
-        border-color: #a5eacb !important;
-        background: #214e419c !important;
+        background: #285c48eb !important;
+        border-color: #beefd2 !important;
       }
 
       #ncBrake {
-        border-color: #e5b0bf !important;
+        background: #603c4deb !important;
+        border-color: #eec0cf !important;
       }
 
       .nc-mobile #brand {
         top: calc(12px + env(safe-area-inset-top, 0px));
         left: calc(12px + env(safe-area-inset-left, 0px));
         font-size: 8px;
-        letter-spacing: .12em;
+        letter-spacing: .1em;
       }
 
       .nc-mobile #objective {
-        top: calc(36px + env(safe-area-inset-top, 0px));
+        top: calc(34px + env(safe-area-inset-top, 0px));
         left: calc(12px + env(safe-area-inset-left, 0px));
-        right: calc(180px + env(safe-area-inset-right, 0px));
+        right: calc(190px + env(safe-area-inset-right, 0px));
         max-width: 390px;
-        max-height: 100px;
+        max-height: 106px;
         overflow: hidden;
-        padding: 7px 9px;
+        padding: 7px;
         font-size: 10px;
         line-height: 1.4;
       }
@@ -291,7 +270,6 @@ export class MobileControls {
         top: calc(10px + env(safe-area-inset-top, 0px));
         right: calc(12px + env(safe-area-inset-right, 0px));
         font-size: 18px;
-        letter-spacing: 4px;
       }
 
       .nc-mobile #clock {
@@ -301,27 +279,27 @@ export class MobileControls {
       }
 
       .nc-mobile #mini {
-        width: 76px;
-        height: 76px;
-        left: calc(12px + env(safe-area-inset-left, 0px));
-        bottom: calc(164px + env(safe-area-inset-bottom, 0px));
+        left: calc(14px + env(safe-area-inset-left, 0px));
+        bottom: calc(178px + env(safe-area-inset-bottom, 0px));
+        width: 72px;
+        height: 72px;
       }
 
       .nc-mobile #stats {
-        left: calc(98px + env(safe-area-inset-left, 0px));
-        bottom: calc(164px + env(safe-area-inset-bottom, 0px));
+        left: calc(97px + env(safe-area-inset-left, 0px));
+        bottom: calc(178px + env(safe-area-inset-bottom, 0px));
         font-size: 8px;
       }
 
       .nc-mobile #stats .bar {
-        width: 76px;
+        width: 72px;
         height: 4px;
-        margin: 4px 0 8px;
+        margin: 4px 0 7px;
       }
 
       .nc-mobile #speed {
-        right: calc(14px + env(safe-area-inset-right, 0px));
-        bottom: calc(151px + env(safe-area-inset-bottom, 0px));
+        right: calc(18px + env(safe-area-inset-right, 0px));
+        bottom: calc(219px + env(safe-area-inset-bottom, 0px));
         font-size: 26px;
       }
 
@@ -330,143 +308,119 @@ export class MobileControls {
       }
 
       .nc-mobile #prompt {
-        bottom: calc(152px + env(safe-area-inset-bottom, 0px));
-        max-width: calc(100% - 360px);
+        bottom: calc(126px + env(safe-area-inset-bottom, 0px));
+        max-width: calc(100% - 350px);
         padding: 6px 8px;
         font-size: 10px;
       }
 
       .nc-mobile #toast {
         top: 20%;
+        max-width: 84vw;
         padding: 9px 12px;
         font-size: 11px;
-        max-width: 80vw;
       }
 
       .nc-mobile .panel {
+        max-height: 92vh;
         max-height: 92dvh;
         padding: 20px;
         -webkit-overflow-scrolling: touch;
-      }
-
-      .nc-mobile .panel h1 {
-        font-size: clamp(30px, 8vw, 56px);
       }
 
       .nc-mobile .panel button {
         min-height: 46px;
       }
 
-      .nc-mobile .setting {
-        gap: 12px;
-      }
-
-      .nc-mobile .setting input[type="range"] {
-        max-width: 45%;
-      }
-
       @media (orientation: portrait) {
-        .nc-mobile #objective {
-          right: 140px;
-          max-height: 126px;
-        }
-
         #ncPedals {
-          right: calc(14px + var(--nc-right));
-          bottom: calc(162px + var(--nc-bottom));
+          left: auto;
+          right: calc(16px + var(--right));
+          bottom: calc(218px + var(--bottom));
+          transform: none;
         }
 
-        .nc-mobile #speed {
-          top: calc(177px + env(safe-area-inset-top, 0px));
-          bottom: auto;
+        .nc-mobile #objective {
+          right: 135px;
         }
 
         .nc-mobile #prompt {
-          bottom: calc(260px + env(safe-area-inset-bottom, 0px));
-          max-width: calc(100% - 28px);
+          bottom: calc(315px + env(safe-area-inset-bottom, 0px));
+          max-width: calc(100% - 30px);
         }
 
-        .nc-mobile #chapter {
-          left: 6%;
-          max-width: 88%;
+        .nc-mobile #speed {
+          bottom: calc(302px + env(safe-area-inset-bottom, 0px));
         }
 
-        .nc-mobile #chapter strong {
-          font-size: 28px;
+        #ncLookHint {
+          right: 10%;
+          top: 43%;
         }
       }
 
-      @media (max-height: 350px) and (orientation: landscape) {
-        .nc-mobile #mini {
-          display: none;
-        }
-
+      @media (max-height: 380px) and (orientation: landscape) {
+        .nc-mobile #mini,
         .nc-mobile #stats {
-          left: 12px;
-          bottom: 154px;
-        }
-
-        .nc-mobile #objective {
-          left: 112px;
-          max-height: 65px;
+          display: none;
         }
       }
     `;
 
     document.head.appendChild(style);
-  }
 
-  buildControls() {
-    const root = this.root = document.createElement('div');
-    root.id = 'ncTouch';
-    root.hidden = true;
+    this.root = document.createElement('div');
+    this.root.id = 'ncTouch';
+    this.root.hidden = true;
 
-    root.innerHTML = `
+    this.root.innerHTML = `
       <div id="ncLook" aria-label="Swipe to look"></div>
+      <span id="ncLookHint">SWIPE TO LOOK</span>
 
-      <div id="ncStick" role="group" aria-label="Movement joystick">
+      <div id="ncStick" aria-label="Movement joystick">
         <div id="ncKnob"></div>
         <span id="ncStickLabel">MOVE</span>
       </div>
 
       <div id="ncToolbar">
-        <button type="button" id="ncPhone">Phone</button>
-        <button type="button" id="ncMap">Map</button>
-        <button type="button" id="ncPause">Pause</button>
+        <button type="button" id="ncPhone">PHONE</button>
+        <button type="button" id="ncMap">MAP</button>
+        <button type="button" id="ncPause">PAUSE</button>
       </div>
 
       <div id="ncPhoneTabs" hidden>
-        <button type="button" data-tab="1">Jobs</button>
-        <button type="button" data-tab="2">Map</button>
-        <button type="button" data-tab="3">People</button>
-        <button type="button" data-tab="4">System</button>
+        <button type="button" data-tab="1">JOBS</button>
+        <button type="button" data-tab="2">MAP</button>
+        <button type="button" data-tab="3">PEOPLE</button>
+        <button type="button" data-tab="4">SYSTEM</button>
       </div>
 
       <div id="ncActions">
-        <button type="button" id="ncRun">Run</button>
-        <button type="button" id="ncJump">Jump</button>
-        <button type="button" id="ncCrouch">Crouch</button>
+        <button type="button" id="ncUse">USE</button>
+        <button type="button" id="ncJump">JUMP</button>
+        <button type="button" id="ncRun">RUN</button>
+        <button type="button" id="ncCrouch">CROUCH</button>
+        <button type="button" id="ncLights" hidden>LIGHTS</button>
+        <button type="button" id="ncRadio" hidden>RADIO</button>
       </div>
 
       <div id="ncPedals" hidden>
-        <button type="button" id="ncBrake">Brake<br>Reverse</button>
-        <button type="button" id="ncGas">Gas</button>
+        <button type="button" id="ncBrake">BRAKE<br>REVERSE</button>
+        <button type="button" id="ncGas">GAS</button>
       </div>
-
-      <button type="button" id="ncUse">Use</button>
     `;
 
-    root.addEventListener('contextmenu', event => {
-      event.preventDefault();
-    });
-
-    document.body.appendChild(root);
+    document.body.appendChild(this.root);
 
     this.elements = {};
 
-    for (const element of root.querySelectorAll('[id]')) {
+    for (const element of this.root.querySelectorAll('[id]')) {
       this.elements[element.id] = element;
     }
+
+    this.root.addEventListener('contextmenu', event => {
+      event.preventDefault();
+    });
   }
 
   consume(event) {
@@ -474,27 +428,21 @@ export class MobileControls {
     event.stopPropagation();
   }
 
-  /*
-    Each control captures its own pointer.
-
-    This allows movement, camera dragging, and a held action button
-    to work simultaneously with separate fingers.
-  */
   track(element, handlers) {
     let pointer = null;
 
     const finish = () => {
       if (pointer === null) return;
 
-      const previous = pointer;
+      const oldPointer = pointer;
       pointer = null;
 
       element.classList.remove('down');
       handlers.end?.();
 
       try {
-        if (element.hasPointerCapture(previous)) {
-          element.releasePointerCapture(previous);
+        if (element.hasPointerCapture(oldPointer)) {
+          element.releasePointerCapture(oldPointer);
         }
       } catch {}
     };
@@ -504,13 +452,11 @@ export class MobileControls {
         !this.game.running ||
         pointer !== null ||
         event.button !== 0
-      ) {
-        return;
-      }
+      ) return;
 
       this.consume(event);
-
       pointer = event.pointerId;
+
       element.classList.add('down');
 
       try {
@@ -540,23 +486,20 @@ export class MobileControls {
       if (event.pointerId === pointer) finish();
     });
 
-    this.cancellers.push(finish);
+    this.cancelHandlers.push(finish);
   }
 
-  setKeys(source, codes) {
-    if (codes.length) {
-      this.sources.set(source, codes);
-    } else {
-      this.sources.delete(source);
-    }
+  setHeld(source, keys) {
+    if (keys.length) this.sources.set(source, keys);
+    else this.sources.delete(source);
 
     const next = new Set();
 
-    for (const keys of this.sources.values()) {
-      for (const key of keys) next.add(key);
+    for (const list of this.sources.values()) {
+      for (const key of list) next.add(key);
     }
 
-    for (const key of this.heldKeys) {
+    for (const key of this.held) {
       if (!next.has(key)) this.game.input.keys.delete(key);
     }
 
@@ -564,81 +507,74 @@ export class MobileControls {
       this.game.input.keys.add(key);
     }
 
-    this.heldKeys = next;
+    this.held = next;
   }
 
-  pulse(code) {
-    if (this.game.running) {
-      this.game.input.pressed.add(code);
-    }
-  }
-
-  bindButton(element, getAction) {
-    const source = `touch-button:${element.id || element.dataset.tab}`;
+  button(element, action) {
+    const source = `button:${element.id || element.dataset.tab}`;
 
     this.track(element, {
       start: () => {
-        const action = getAction();
+        const command = action();
 
-        if (action.hold) {
-          this.setKeys(source, [action.key]);
-        } else if (action.key) {
-          this.pulse(action.key);
+        if (command.hold) {
+          this.setHeld(source, [command.key]);
+        } else if (command.key) {
+          this.game.input.pressed.add(command.key);
         }
 
-        action.run?.();
+        command.run?.();
       },
 
-      end: () => this.setKeys(source, [])
+      end: () => this.setHeld(source, [])
     });
   }
 
-  bindControls() {
-    const elements = this.elements;
+  bind() {
+    const e = this.elements;
     const game = this.game;
 
-    this.bindButton(elements.ncPhone, () => ({ key: 'KeyP' }));
-    this.bindButton(elements.ncMap, () => ({ key: 'KeyM' }));
-    this.bindButton(elements.ncUse, () => ({ key: 'KeyE' }));
+    this.button(e.ncPhone, () => ({ key: 'KeyP' }));
+    this.button(e.ncMap, () => ({ key: 'KeyM' }));
+    this.button(e.ncUse, () => ({ key: 'KeyE' }));
+    this.button(e.ncJump, () => ({ key: 'Space' }));
 
-    this.bindButton(elements.ncPause, () => ({
-      run: () => game.ui.pauseMenu()
-    }));
-
-    this.bindButton(elements.ncRun, () => ({
+    this.button(e.ncRun, () => ({
       key: 'ShiftLeft',
       hold: true
     }));
 
-    this.bindButton(elements.ncJump, () => ({
-      key: 'Space'
+    this.button(e.ncCrouch, () => ({
+      key: 'KeyC',
+      hold: true
     }));
 
-    this.bindButton(elements.ncCrouch, () => (
-      game.player.vehicle
-        ? { key: 'KeyH' }
-        : { key: 'KeyC', hold: true }
-    ));
+    this.button(e.ncLights, () => ({ key: 'KeyH' }));
+    this.button(e.ncRadio, () => ({ key: 'KeyR' }));
 
-    this.bindButton(elements.ncGas, () => ({
+    this.button(e.ncGas, () => ({
       key: 'KeyW',
       hold: true
     }));
 
-    this.bindButton(elements.ncBrake, () => ({
+    this.button(e.ncBrake, () => ({
       key: 'KeyS',
       hold: true
     }));
 
-    for (const button of elements.ncPhoneTabs.querySelectorAll('button')) {
-      this.bindButton(button, () => ({
+    this.button(e.ncPause, () => ({
+      run: () => game.ui.pauseMenu()
+    }));
+
+    for (const button of e.ncPhoneTabs.querySelectorAll('button')) {
+      this.button(button, () => ({
         key: `Digit${button.dataset.tab}`
       }));
     }
 
     const moveStick = event => {
-      const rect = elements.ncStick.getBoundingClientRect();
-      const radius = rect.width * 0.34;
+      const rect = e.ncStick.getBoundingClientRect();
+      const radius = rect.width * 0.31;
 
       let dx = event.clientX - rect.left - rect.width / 2;
       let dy = event.clientY - rect.top - rect.height / 2;
@@ -650,59 +586,50 @@ export class MobileControls {
         dy *= radius / length;
       }
 
-      elements.ncKnob.style.transform =
+      e.ncKnob.style.transform =
         `translate(-50%, -50%) translate(${dx}px, ${dy}px)`;
 
       const x = dx / radius;
       const y = dy / radius;
-      const deadzone = 0.28;
-
       const keys = [];
+      const deadzone = 0.26;
 
       if (x < -deadzone) keys.push('KeyA');
       if (x > deadzone) keys.push('KeyD');
 
-      // In a vehicle, the stick steers; pedals control acceleration.
       if (!game.player.vehicle) {
         if (y < -deadzone) keys.push('KeyW');
         if (y > deadzone) keys.push('KeyS');
       }
 
-      this.setKeys('touch-stick', keys);
+      this.setHeld('joystick', keys);
     };
 
-    this.track(elements.ncStick, {
+    this.track(e.ncStick, {
       start: moveStick,
       move: moveStick,
 
       end: () => {
-        this.setKeys('touch-stick', []);
-        elements.ncKnob.style.transform = 'translate(-50%, -50%)';
+        this.setHeld('joystick', []);
+        e.ncKnob.style.transform = 'translate(-50%, -50%)';
       }
     });
 
-    let previousX = 0;
-    let previousY = 0;
+    let lastX = 0;
+    let lastY = 0;
 
-    this.track(elements.ncLook, {
+    this.track(e.ncLook, {
       start: event => {
-        previousX = event.clientX;
-        previousY = event.clientY;
+        lastX = event.clientX;
+        lastY = event.clientY;
       },
 
       move: event => {
-        const dx = Math.max(
-          -90,
-          Math.min(90, event.clientX - previousX)
-        );
+        const dx = Math.max(-90, Math.min(90, event.clientX - lastX));
+        const dy = Math.max(-90, Math.min(90, event.clientY - lastY));
 
-        const dy = Math.max(
-          -90,
-          Math.min(90, event.clientY - previousY)
-        );
-
-        previousX = event.clientX;
-        previousY = event.clientY;
+        lastX = event.clientX;
+        lastY = event.clientY;
 
         game.player.look(dx * 1.75, dy * 1.5);
       }
@@ -712,95 +639,64 @@ export class MobileControls {
   reset() {
     if (!this.enabled) return;
 
-    for (const cancel of this.cancellers) cancel();
+    for (const cancel of this.cancelHandlers) cancel();
 
     this.sources.clear();
 
-    for (const key of this.heldKeys) {
+    for (const key of this.held) {
       this.game.input.keys.delete(key);
     }
 
-    this.heldKeys.clear();
-  }
-
-  updateMenuHelp() {
-    const screen = this.game.ui.screen;
-
-    if (screen === this.lastScreen) return;
-    this.lastScreen = screen;
-
-    if (screen === 'main') {
-      document.getElementById('menuFoot').textContent =
-        'Touch controls enabled. Landscape recommended. ' +
-        'Left stick moves; swipe the right side to look. ' +
-        'Mobile graphics start on Low.';
-    }
-
-    if (screen === 'controls') {
-      const help = document.createElement('p');
-
-      help.innerHTML = `
-        <b>TOUCH CONTROLS</b><br>
-        Left stick: move or steer.<br>
-        Swipe an empty area on the right: look.<br>
-        Hold Run or Crouch; tap Jump or Use.<br>
-        Driving: hold Gas or Brake/Reverse.
-        Run becomes Handbrake, Jump becomes Horn,
-        and Crouch becomes Lights.<br>
-        Open Phone, choose an app, then tap Confirm to accept a job.
-        Save and load are available from Pause.
-      `;
-
-      document.getElementById('menuBody').prepend(help);
-    }
+    this.held.clear();
   }
 
   update() {
     if (!this.enabled) return;
 
     const game = this.game;
-    const elements = this.elements;
-
-    this.updateMenuHelp();
-
+    const e = this.elements;
     const running = game.running;
+
     this.root.hidden = !running;
 
     if (!running) {
-      if (this.wasRunning) this.reset();
-      this.wasRunning = false;
+      if (this.visible) this.reset();
+      this.visible = false;
       return;
     }
 
-    this.wasRunning = true;
+    this.visible = true;
 
-    const vehicleMode = !!game.player.vehicle;
+    const driving = !!game.player.vehicle;
 
-    if (vehicleMode !== this.lastVehicleMode) {
+    if (driving !== this.vehicleMode) {
       this.reset();
-      this.lastVehicleMode = vehicleMode;
+      this.vehicleMode = driving;
 
-      elements.ncStickLabel.textContent = vehicleMode ? 'STEER' : 'MOVE';
-      elements.ncRun.textContent = vehicleMode ? 'Handbrake' : 'Run';
-      elements.ncJump.textContent = vehicleMode ? 'Horn' : 'Jump';
-      elements.ncCrouch.textContent = vehicleMode ? 'Lights' : 'Crouch';
+      e.ncStickLabel.textContent = driving ? 'STEER' : 'MOVE';
+      e.ncJump.textContent = driving ? 'HORN' : 'JUMP';
+      e.ncRun.textContent = driving ? 'HANDBRAKE' : 'RUN';
 
-      elements.ncPedals.hidden = !vehicleMode;
+      e.ncCrouch.hidden = driving;
+      e.ncLights.hidden = !driving;
+      e.ncRadio.hidden = !driving;
+      e.ncPedals.hidden = !driving;
     }
 
-    const phoneOpen = game.player.phone;
-    elements.ncPhoneTabs.hidden = !phoneOpen;
-    elements.ncPhone.textContent = phoneOpen ? 'Close' : 'Phone';
+    const phone = game.player.phone;
 
-    elements.ncUse.textContent = phoneOpen
-      ? 'Confirm'
-      : vehicleMode
-        ? 'Exit'
+    e.ncPhone.textContent = phone ? 'CLOSE' : 'PHONE';
+    e.ncPhoneTabs.hidden = !phone;
+
+    e.ncUse.textContent = phone
+      ? 'CONFIRM'
+      : driving
+        ? 'EXIT'
         : game.player.target?.type === 'vehicle'
-          ? 'Enter'
-          : 'Use';
+          ? 'ENTER'
+          : 'USE';
 
-    // Keep the physical phone inside the narrower portrait camera view.
+    // Keep the physical phone within the portrait camera view.
     const portrait = innerHeight > innerWidth;
 
     game.player.phoneGroup.position.x = portrait ? 0.03 : 0.27;

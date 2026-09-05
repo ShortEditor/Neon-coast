@@ -89,6 +89,7 @@ class Game {
   constructor() {
     this.canvas = document.getElementById('game');
     this.settings = readSettings();
+
     this.touchDevice = MobileControls.supported();
 
     if (this.touchDevice) {
